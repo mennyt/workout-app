@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workout Planner</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--text:#e8e9ec;--muted:#8a8f98;--accent:#4f8cff;--danger:#ff5f5f;--ok:#3ecf8e;--border:#2a2e38;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);padding-bottom:60px;}
+  .wrap{max-width:520px;margin:0 auto;padding:16px;}
+  h1{font-size:20px;margin:8px 0 16px;}
+  h2{font-size:16px;margin:20px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;}
+  input,select,button,textarea{font-size:15px;padding:10px;border-radius:8px;border:1px solid var(--border);background:#0f1115;color:var(--text);width:100%;margin-bottom:8px;}
+  button{background:var(--accent);border:none;font-weight:600;cursor:pointer;}
+  button.secondary{background:transparent;border:1px solid var(--border);color:var(--text);}
+  button.small{width:auto;padding:6px 10px;font-size:13px;margin:2px;}
+  .row{display:flex;gap:8px;}
+  .row>*{flex:1;}
+  .muted{color:var(--muted);font-size:13px;}
+  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;background:#232733;margin-left:6px;}
+  .tag.ok{background:rgba(62,207,142,.15);color:var(--ok);}
+  .exercise{border-top:1px solid var(--border);padding-top:8px;margin-top:8px;}
+  .setrow{display:flex;gap:6px;align-items:center;margin-bottom:4px;}
+  .setrow input{margin-bottom:0;}
+  a.linklike{color:var(--accent);cursor:pointer;font-size:13px;}
+  #authError{color:var(--danger);font-size:13px;}
+  header{display:flex;justify-content:space-between;align-items:center;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">Loading…</div>
+
+<script>
+// ====== CONFIG ======
+const SUPABASE_URL = 'https://vypqlhjdeijjtnxuymst.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ5cHFsaGpkZWlqanRueHV5bXN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1MzI1NTksImV4cCI6MjEwNjEwODU1OX0.XQBHcJmZu9SI_tCd-hSxzh_CGehSStfac36OI0xpQ9c';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const app = document.getElementById('app');
+let profile = null;
+
+async function init(){
+  // Supabase redirects invite/recovery links back here with tokens in the
+  // URL hash (e.g. #access_token=...&type=invite). Detect that first.
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  if(hash.get('type') === 'invite' || hash.get('type') === 'recovery'){
+    renderSetPassword();
+    return;
+  }
+  const { data: { session } } = await sb.auth.getSession();
+  if(!session){ renderAuth(); return; }
+  const { data, error } = await sb.from('profiles').select('*').eq('id', session.user.id).single();
+  if(error || !data){ renderAuth("Couldn't load profile — try logging in again."); return; }
+  profile = data;
+  profile.role === 'trainer' ? renderTrainer() : renderClient();
+}
+
+function renderSetPassword(){
+  app.innerHTML = `
+    <h1>💪 Welcome — set your password</h1>
+    <div class="card">
+      <div id="authError"></div>
+      <input id="newpass" placeholder="Choose a password (min 6 chars)" type="password">
+      <button onclick="setInvitePassword()">Set password & continue</button>
+    </div>`;
+}
+async function setInvitePassword(){
+  const password = document.getElementById('newpass').value;
+  if(password.length < 6){ setErr('Min 6 characters.'); return; }
+  const { error } = await sb.auth.updateUser({ password });
+  if(error){ setErr(error.message); return; }
+  history.replaceState(null, '', window.location.pathname); // clear the hash
+  init();
+}
+
+// ---------- AUTH ----------
+function renderAuth(err){
+  app.innerHTML = `
+    <h1>💪 Workout Planner</h1>
+    <div class="card">
+      <div id="authError">${err||''}</div>
+      <div id="loginForm">
+        <input id="email" placeholder="Email" type="email">
+        <input id="password" placeholder="Password" type="password">
+        <button onclick="doLogin()">Log in</button>
+        <a class="linklike" onclick="showRegister()">Need an account? Register</a>
+      </div>
+      <div id="registerForm" style="display:none">
+        <input id="rname" placeholder="Your name">
+        <input id="remail" placeholder="Email" type="email">
+        <input id="rpassword" placeholder="Password (min 6 chars)" type="password">
+        <select id="rrole">
+          <option value="client">I'm a client</option>
+          <option value="trainer">I'm a trainer</option>
+        </select>
+        <button onclick="doRegister()">Register</button>
+        <a class="linklike" onclick="showLogin()">Already have an account? Log in</a>
+      </div>
+    </div>`;
+}
+function showRegister(){document.getElementById('loginForm').style.display='none';document.getElementById('registerForm').style.display='block';}
+function showLogin(){document.getElementById('loginForm').style.display='block';document.getElementById('registerForm').style.display='none';}
+
+async function doRegister(){
+  const name = document.getElementById('rname').value.trim();
+  const email = document.getElementById('remail').value.trim();
+  const password = document.getElementById('rpassword').value;
+  const role = document.getElementById('rrole').value;
+  if(!name||!email||password.length<6){ setErr('Fill all fields, password min 6 chars.'); return; }
+  const { error } = await sb.auth.signUp({ email, password, options:{ data:{ name, role } } });
+  if(error){ setErr(error.message); return; }
+  setErr('Account created — check your email to confirm, then log in.', true);
+  showLogin();
+}
+async function doLogin(){
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if(error){ setErr(error.message); return; }
+  init();
+}
+function setErr(msg, ok){
+  const e = document.getElementById('authError');
+  if(e){ e.style.color = ok ? 'var(--ok)' : 'var(--danger)'; e.textContent = msg; }
+}
+async function logout(){ await sb.auth.signOut(); profile=null; renderAuth(); }
+
+// ---------- TRAINER ----------
+async function renderTrainer(){
+  const { data: links } = await sb.from('trainer_clients').select('*, profiles!trainer_clients_client_id_fkey(*)').eq('trainer_id', profile.id).eq('status','active');
+  const { data: invites } = await sb.from('client_invites').select('*').eq('trainer_id', profile.id).eq('status','pending');
+  const { data: programs } = await sb.from('programs').select('*, program_days(*, exercises(*, target_sets(*)))').eq('trainer_id', profile.id).eq('archived', false);
+  const clients = (links||[]).map(l => l.profiles);
+  app.innerHTML = `
+    <header><h1>Trainer: ${profile.name}</h1><button class="secondary small" onclick="logout()">Log out</button></header>
+    <h2>Clients (${clients.length})</h2>
+    <div class="card">${clients.map(c=>`<div>${c.name}</div>`).join('') || '<span class="muted">No linked clients yet</span>'}
+      ${(invites||[]).map(i=>`<div class="muted">✉ ${i.name} (${i.email}) — invite pending</div>`).join('')}
+    </div>
+    <button onclick="showInviteForm()">+ New Client</button>
+    <div id="inviteForm"></div>
+    <h2>Programs</h2>
+    <div id="programList">${(programs||[]).map(renderProgramCard).join('') || '<div class="muted">No programs yet</div>'}</div>
+    <button onclick="showNewProgram()">+ New Program</button>
+    <div id="newProgramForm"></div>
+  `;
+  window._clients = clients||[];
+}
+function showInviteForm(){
+  document.getElementById('inviteForm').innerHTML = `
+    <div class="card">
+      <input id="iname" placeholder="Client name">
+      <input id="iemail" placeholder="Client email" type="email">
+      <input id="iphone" placeholder="Client phone (optional)">
+      <div id="inviteMsg" class="muted"></div>
+      <button onclick="sendInvite()">Send invite</button>
+    </div>`;
+}
+async function sendInvite(){
+  const name = document.getElementById('iname').value.trim();
+  const email = document.getElementById('iemail').value.trim();
+  const phone = document.getElementById('iphone').value.trim();
+  const msgEl = document.getElementById('inviteMsg');
+  if(!name || !email){ msgEl.textContent = 'Name and email required.'; return; }
+  msgEl.textContent = 'Sending…';
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/invite-client`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+    body: JSON.stringify({ name, email, phone })
+  });
+  const result = await res.json();
+  if(!result.ok){ msgEl.textContent = 'Error: ' + result.error; return; }
+  msgEl.textContent = 'Invite sent!';
+  renderTrainer();
+}
+function renderProgramCard(p){
+  const days = (p.program_days||[]).map(d=>`
+    <div class="exercise"><b>${d.name}</b>
+      ${(d.exercises||[]).map(ex=>`<div>• ${ex.name} ${(ex.target_sets||[]).map(t=>schemeLabel(t)).join(', ')}</div>`).join('')}
+    </div>`).join('');
+  return `<div class="card"><b>${p.name}</b> <span class="tag">v${p.version}</span> ${days}</div>`;
+}
+function schemeLabel(t){
+  if(t.scheme==='weight_reps') return `${t.target_weight||'?'}kg×${t.target_reps_min}-${t.target_reps_max||t.target_reps_min}`;
+  if(t.scheme==='reps_only') return `${t.target_reps_min}-${t.target_reps_max||t.target_reps_min} reps`;
+  if(t.scheme==='amrap') return `AMRAP`;
+  if(t.scheme==='timed') return `${t.target_seconds_min}s hold`;
+  return t.scheme;
+}
+function showNewProgram(){
+  const clientOptions = window._clients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  document.getElementById('newProgramForm').innerHTML = `
+    <div class="card">
+      <input id="pname" placeholder="Program name (e.g. Push Pull Legs)">
+      <select id="pclient"><option value="">Assign to client…</option>${clientOptions}</select>
+      <textarea id="pdays" rows="6" placeholder="Day Name | Exercise | scheme(weight_reps/reps_only/amrap/timed) | value
+example:
+Push Day | Bench Press | weight_reps | 60kg x 8-10
+Push Day | Overhead Press | weight_reps | 30kg x 8-10
+Pull Day | Pull Ups | amrap |
+Core | Plank | timed | 60"></textarea>
+      <button onclick="createProgram()">Create & assign</button>
+    </div>`;
+}
+async function createProgram(){
+  const name = document.getElementById('pname').value.trim();
+  const client_id = document.getElementById('pclient').value;
+  const raw = document.getElementById('pdays').value.trim();
+  if(!name||!client_id||!raw){ alert('Fill program name, client, and at least one exercise line'); return; }
+  const { data: prog, error } = await sb.from('programs').insert({ trainer_id: profile.id, client_id, name, version:1 }).select().single();
+  if(error){ alert(error.message); return; }
+  const dayMap = {}; let dayOrder=0, exOrder={};
+  for(const line of raw.split('\n')){
+    const parts = line.split('|').map(s=>s.trim());
+    if(parts.length<3) continue;
+    const [dayName, exName, scheme, val] = parts;
+    if(!dayMap[dayName]){
+      const { data: d } = await sb.from('program_days').insert({ program_id: prog.id, name: dayName, day_order: dayOrder++ }).select().single();
+      dayMap[dayName] = d.id; exOrder[dayName]=0;
+    }
+    const { data: ex } = await sb.from('exercises').insert({ program_day_id: dayMap[dayName], name: exName, exercise_order: exOrder[dayName]++ }).select().single();
+    const target = { exercise_id: ex.id, scheme, set_order:0 };
+    if(scheme==='weight_reps'){ const m=(val||'').match(/([\d.]+)kg\s*x\s*(\d+)-?(\d+)?/i); if(m){ target.target_weight=+m[1]; target.target_reps_min=+m[2]; target.target_reps_max=m[3]?+m[3]:+m[2]; } }
+    if(scheme==='reps_only'){ const m=(val||'').match(/(\d+)-?(\d+)?/); if(m){ target.target_reps_min=+m[1]; target.target_reps_max=m[2]?+m[2]:+m[1]; } }
+    if(scheme==='timed'){ target.target_seconds_min = +(val||0); }
+    await sb.from('target_sets').insert(target);
+  }
+  renderTrainer();
+}
+
+// ---------- CLIENT ----------
+async function renderClient(){
+  const { data: programs } = await sb.from('programs').select('*, program_days(*, exercises(*, target_sets(*)))').eq('client_id', profile.id).eq('archived', false).order('version',{ascending:false}).limit(1);
+  const program = programs && programs[0];
+  const { data: history } = await sb.from('sessions').select('*').eq('client_id', profile.id).order('started_at',{ascending:false}).limit(10);
+  app.innerHTML = `
+    <header><h1>Hi, ${profile.name}</h1><button class="secondary small" onclick="logout()">Log out</button></header>
+    ${program ? `
+      <h2>${program.name} <span class="tag">v${program.version}</span></h2>
+      ${(program.program_days||[]).map(d=>`
+        <div class="card"><b>${d.name}</b>
+          ${(d.exercises||[]).map(ex=>`<div class="exercise">${ex.name} — <span class="muted">${(ex.target_sets||[]).map(schemeLabel).join(', ')}</span></div>`).join('')}
+          <button class="small" onclick="startSession('${program.id}', ${program.version}, '${d.id}')">Start ${d.name}</button>
+        </div>`).join('')}
+    ` : `<div class="card muted">No program assigned yet — ask your trainer.</div>`}
+    <h2>History</h2>
+    <div class="card">${(history||[]).map(s=>`<div>${new Date(s.started_at).toLocaleDateString()} — <span class="tag ${s.status==='completed'?'ok':''}">${s.status}</span></div>`).join('') || '<span class="muted">No sessions yet</span>'}</div>
+  `;
+  window._program = program;
+}
+async function startSession(program_id, program_version, day_id){
+  const { data: session } = await sb.from('sessions').insert({ client_id: profile.id, program_id, program_version, status:'in_progress' }).select().single();
+  const day = window._program.program_days.find(d=>d.id===day_id);
+  app.innerHTML = `
+    <header><h1>${day.name}</h1><button class="secondary small" onclick="renderClient()">Back</button></header>
+    ${day.exercises.map(ex=>`
+      <div class="card"><b>${ex.name}</b>
+        <div class="muted">${ex.target_sets.map(schemeLabel).join(', ')}</div>
+        <div id="log_${ex.id}">
+          <div class="setrow"><input id="w_${ex.id}" placeholder="kg" style="width:60px"><input id="r_${ex.id}" placeholder="reps/sec" style="width:70px"><button class="small" onclick="logSet('${session.id}','${ex.id}')">Log set</button></div>
+        </div>
+      </div>`).join('')}
+    <button onclick="finishSession('${session.id}')">Finish workout</button>
+  `;
+}
+async function logSet(session_id, exercise_id){
+  const weight = document.getElementById('w_'+exercise_id).value || null;
+  const reps = document.getElementById('r_'+exercise_id).value || null;
+  await sb.from('logged_sets').insert({ session_id, exercise_id, weight, reps });
+  document.getElementById('log_'+exercise_id).insertAdjacentHTML('beforeend', `<div class="muted">Logged: ${weight||''}kg × ${reps||''}</div>`);
+  document.getElementById('w_'+exercise_id).value=''; document.getElementById('r_'+exercise_id).value='';
+}
+async function finishSession(session_id){
+  await sb.from('sessions').update({ status:'completed', finished_at: new Date().toISOString() }).eq('id', session_id);
+  renderClient();
+}
+
+init();
+</script>
+</body>
+</html>
